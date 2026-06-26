@@ -254,133 +254,9 @@ namespace {
 static constexpr int FOUR_K_WIDTH = 3840;
 static constexpr int FOUR_K_HEIGHT = 2160;
 static constexpr char kOplusRefreshRateProperty[] = "vendor.display.oplus_refresh_rate";
-static constexpr char kOplusDisplayPanelFeatureService[] =
-        "vendor.oplus.hardware.displaypanelfeature.IDisplayPanelFeature/default";
-static constexpr char kOplusMinFpsPath[] = "/sys/kernel/oplus_display/min_fps";
-static constexpr int kOplusFeatureLongruiAod = 217;
-static constexpr int kOplusFeatureAdfr2MinFpsEnable = 232;
-static constexpr int kOplusLongruiAodOff = 0;
-static constexpr int kOplusLongruiAodOn = 14;
-static constexpr uint32_t kOplusTransactionSetQsyncMode = 23003;
-static constexpr uint32_t kOplusTransactionSetQsyncMinFps = 23004;
-static constexpr uint32_t kOplusTransactionGetModeType = 23005;
-static constexpr uint32_t kOplusTransactionAdfrMinFps = 23009;
-static constexpr uint32_t kOplusTransactionRefreshRateInfo = 22032;
-
-enum class OplusDisplayModeType : int32_t {
-    SA = 0,
-    OA = 2,
-};
 
 bool shouldUseOplusMinFpsOverlay() {
     return base::GetIntProperty(kOplusRefreshRateProperty, 0) > 0;
-}
-
-std::shared_ptr<IDisplayPanelFeature> getOplusDisplayPanelFeature() {
-    static std::shared_ptr<IDisplayPanelFeature> panelFeature;
-    static bool loggedUnavailable = false;
-
-    if (panelFeature != nullptr) {
-        return panelFeature;
-    }
-
-    sp<IBinder> platformBinder =
-            defaultServiceManager()->checkService(String16(kOplusDisplayPanelFeatureService));
-    if (platformBinder == nullptr) {
-        if (!loggedUnavailable) {
-            ALOGW("Oplus display panel feature service unavailable");
-            loggedUnavailable = true;
-        }
-        return nullptr;
-    }
-
-    ndk::SpAIBinder binder(AIBinder_fromPlatformBinder(platformBinder));
-    panelFeature = IDisplayPanelFeature::fromBinder(binder);
-    if (panelFeature == nullptr && !loggedUnavailable) {
-        ALOGW("Failed to bind Oplus display panel feature service");
-        loggedUnavailable = true;
-    }
-    return panelFeature;
-}
-
-void notifyOplusAodState(bool enabled) {
-    auto panelFeature = getOplusDisplayPanelFeature();
-    if (panelFeature == nullptr) {
-        return;
-    }
-
-    std::vector<int> values = {enabled ? kOplusLongruiAodOn : kOplusLongruiAodOff};
-    int status = 0;
-    const auto ret =
-            panelFeature->setDisplayPanelFeatureValue(kOplusFeatureLongruiAod, values, &status);
-    if (!ret.isOk() || status != 0) {
-        ALOGW("Failed to notify Oplus AOD state %d, binder=%s status=%d", enabled,
-              ret.getDescription().c_str(), status);
-        return;
-    }
-
-    ALOGD("Notified Oplus AOD state %d", enabled);
-}
-
-status_t setOplusQsyncMinFps(int fps) {
-    auto panelFeature = getOplusDisplayPanelFeature();
-    if (panelFeature == nullptr) {
-        return NAME_NOT_FOUND;
-    }
-
-    std::vector<int> values = {0, fps};
-    int status = 0;
-    const auto ret = panelFeature->setDisplayPanelFeatureValue(kOplusFeatureAdfr2MinFpsEnable,
-                                                               values, &status);
-    if (!ret.isOk() || status != 0) {
-        ALOGW("Failed to set Oplus QSync minfps %d, binder=%s status=%d", fps,
-              ret.getDescription().c_str(), status);
-        return UNKNOWN_ERROR;
-    }
-
-    ALOGD("Set Oplus QSync minfps %d", fps);
-    return NO_ERROR;
-}
-
-status_t setOplusQsyncMode(bool enabled) {
-    auto panelFeature = getOplusDisplayPanelFeature();
-    if (panelFeature == nullptr) {
-        return NAME_NOT_FOUND;
-    }
-
-    std::vector<int> values = {0, enabled ? 1 : 0};
-    int status = 0;
-    const auto ret = panelFeature->setDisplayPanelFeatureValue(kOplusFeatureAdfr2MinFpsEnable,
-                                                               values, &status);
-    if (!ret.isOk() || status != 0) {
-        ALOGW("Failed to set Oplus QSync mode %d, binder=%s status=%d", enabled,
-              ret.getDescription().c_str(), status);
-        return UNKNOWN_ERROR;
-    }
-
-    ALOGD("Set Oplus QSync mode %d", enabled);
-    return NO_ERROR;
-}
-
-int32_t getOplusDisplayModeType(const DisplayModePtr& mode) {
-    // Stock Oplus VRR queries SF for SA/SM/OA/OM classification. We only expose
-    // adaptive-vs-standard here: modes with VRR config are Oplus adaptive modes.
-    return static_cast<int32_t>(mode->getVrrConfig().has_value() ? OplusDisplayModeType::OA
-                                                                  : OplusDisplayModeType::SA);
-}
-
-std::string getOplusRefreshRateInfo() {
-    std::string minFps;
-    if (!android::base::ReadFileToString(kOplusMinFpsPath, &minFps)) {
-        minFps = "unknown";
-    } else {
-        minFps = android::base::Trim(minFps);
-    }
-
-    const std::string measured =
-            base::GetProperty(kOplusRefreshRateProperty, "unknown");
-    return base::StringPrintf("Oplus Refresh Rate Info: measured=%s minfps=%s",
-                              measured.c_str(), minFps.c_str());
 }
 
 // TODO(b/141333600): Consolidate with DisplayMode::Builder::getDefaultDensity.
@@ -1184,7 +1060,7 @@ void SurfaceFlinger::init() FTL_FAKE_GUARD(kMainThreadContext) {
                                 display->updateRefreshRateOverlayRate(vsyncRate, renderRate);
                             }
                         }));
-                        if (base::GetBoolProperty("debug.sf.show_oplus_min_fps_overlay", false)) {
+                        if (shouldUseOplusMinFpsOverlay()) {
                             for (const nsecs_t delay : {ms2ns(250), ms2ns(750), ms2ns(1500)}) {
                                 static_cast<void>(mScheduler->scheduleDelayed(
                                         [=, this]() FTL_FAKE_GUARD(kMainThreadContext) {
@@ -2798,7 +2674,7 @@ void SurfaceFlinger::onComposerHalVsyncIdle(hal::HWDisplayId hwcDisplayId) {
     REQUIRE_SCHEDULER;
     mScheduler->forceNextResync();
 
-    if (!base::GetBoolProperty("debug.sf.show_oplus_min_fps_overlay", false)) {
+    if (!shouldUseOplusMinFpsOverlay()) {
         return;
     }
 
@@ -8370,7 +8246,7 @@ void SurfaceFlinger::kernelTimerChanged(PhysicalDisplayId displayId, bool expire
         }
     }));
 
-    if (expired && base::GetBoolProperty("debug.sf.show_oplus_min_fps_overlay", false)) {
+    if (expired && shouldUseOplusMinFpsOverlay()) {
         static_cast<void>(mScheduler->scheduleDelayed([=, this]() FTL_FAKE_GUARD(kMainThreadContext) {
             const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayId));
             if (!display || !display->isRefreshRateOverlayEnabled()) return;
@@ -8395,7 +8271,7 @@ void SurfaceFlinger::vrrDisplayIdle(PhysicalDisplayId displayId, bool idle) {
         }
     }));
 
-    if (idle && base::GetBoolProperty("debug.sf.show_oplus_min_fps_overlay", false)) {
+    if (idle && shouldUseOplusMinFpsOverlay()) {
         static_cast<void>(mScheduler->scheduleDelayed([=, this] {
             if (const auto display = FTL_FAKE_GUARD(mStateLock, getDisplayDeviceLocked(displayId))) {
                 if (!display->isRefreshRateOverlayEnabled()) return;
@@ -9671,7 +9547,7 @@ status_t SurfaceFlinger::setSmallAreaDetectionThreshold(int32_t appId, float thr
 void SurfaceFlinger::enableRefreshRateOverlay(bool enable) {
     bool setByHwc = getHwComposer().hasCapability(Capability::REFRESH_RATE_CHANGED_CALLBACK_DEBUG);
     const bool showOplusMinFps =
-            base::GetBoolProperty("debug.sf.show_oplus_min_fps_overlay", false);
+            shouldUseOplusMinFpsOverlay();
     if (showOplusMinFps) {
         setByHwc = false;
     }
