@@ -42,7 +42,7 @@ std::optional<int> getOplusMinFpsForOverlay() {
 
 } // namespace
 
-auto RefreshRateOverlay::draw(int refreshRate, int renderFps, bool idle, SkColor color,
+auto RefreshRateOverlay::draw(int refreshRate, int renderFps, [[maybe_unused]] bool idle, SkColor color,
                               ui::Transform::RotationFlags rotation, ftl::Flags<Features> features)
         -> Buffers {
     const size_t loopCount = features.test(Features::Spinner) ? 6 : 1;
